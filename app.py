@@ -83,7 +83,7 @@ def zip_csv(files):
         for name,df in files.items():z.writestr(name,df.to_csv(index=False,encoding="utf-8-sig"))
     return b.getvalue()
 
-st.title("02 Brand Personality Analyzer · v1.6")
+st.title("02 Brand Personality Analyzer · v1.7")
 st.caption("Aaker 15 facets → 5 dimensions · Mean ± SD · Radar visualization")
 st.info("시각화는 Yoo & Lee (2025)의 다차원 정량값 방사형 차트, 평균·표준편차, 하위 사례와 대표값을 함께 제시하는 방식을 참고하여 브랜드 개성 분석에 적용했습니다.")
 
@@ -160,7 +160,7 @@ if f:
         summary["Primary_Dimension"]=summary[ds].idxmax(axis=1)
         fcols=[c for c in detail if c.startswith("Facet_")]
         fsum=detail.groupby("Brand")[fcols].mean().reset_index()
-        st.session_state["R"]={"approval":edited,"summary":summary,"facets":fsum,
+        st.session_state["R"]={"approval":final.copy(),"summary":summary,"facets":fsum,
                                "detail":detail,"sample_info":sample_info,"mode":mode}
 
 if "R" in st.session_state:
@@ -214,12 +214,12 @@ if "R" in st.session_state:
 
     with st.expander("Unit별 분석 근거"):st.dataframe(detail[detail.Brand==brand],use_container_width=True,height=420)
 
-    files={"02_sample_size_information_v1_6.csv":R["sample_info"],"02_content_units_researcher_approval_v1_6.csv":R["approval"],
-    "02_brand_personality_5D_profiles_v1_6.csv":summary,
-    "02_brand_personality_15facet_profiles_v1_6.csv":fsum,
-    "02_brand_personality_unit_scores_v1_6.csv":detail}
+    files={"02_sample_size_information_v1_7.csv":R["sample_info"],"02_content_units_researcher_approval_v1_7.csv":R["approval"],
+    "02_brand_personality_5D_profiles_v1_7.csv":summary,
+    "02_brand_personality_15facet_profiles_v1_7.csv":fsum,
+    "02_brand_personality_unit_scores_v1_7.csv":detail}
     st.header("결과 다운로드")
-    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_6.zip","application/zip")
+    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_7.zip","application/zip")
     cols=st.columns(4)
     for c,(n,d) in zip(cols,files.items()):c.download_button(n.replace(".csv",""),d.to_csv(index=False).encode("utf-8-sig"),n,"text/csv")
 

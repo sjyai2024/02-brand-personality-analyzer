@@ -1,12 +1,15 @@
-# 02 Brand Personality Analyzer v1.6
+# 02 Brand Personality Analyzer v1.7
 
-01 v2.x의 최종 파일 `01_all_brands_approved_units.csv`를 직접 입력받도록 수정.
+## NameError 수정
+01 v2.x 최종 승인 CSV를 사용할 때 `edited` 변수가 존재하지 않는데
+분석 결과 session_state 저장 단계에서 `edited`를 참조하던 오류를 수정했습니다.
 
-새 입력 형식:
-Brand, Unit_ID, Page_ID, Source_URL, Text, Word_Count, Character_Count,
-Auto_Category, Researcher_Final, Researcher_Note
+이제 session_state에는 실제 01 최종 승인 데이터(`final`)를 저장합니다.
 
-01에서 이미 Content Unit 분리 및 연구자 승인이 끝났으므로 02에서는 재분할·재승인하지 않습니다.
-승인 Unit을 그대로 Aaker 15 facets → 5 dimensions 분석에 사용합니다.
-
-구형 Brand / Original_Text / Include 형식도 호환 지원합니다.
+지원:
+- 01_all_brands_approved_units.csv 직접 입력
+- Full Sample — Primary Analysis
+- Balanced Sample — Robustness Check
+- Aaker 15 facets → 5 dimensions
+- Mean ± SD / Radar / 브랜드 비교 / 15 Facet
+- CSV 및 ZIP 다운로드
