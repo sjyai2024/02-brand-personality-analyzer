@@ -83,29 +83,42 @@ def zip_csv(files):
         for name,df in files.items():z.writestr(name,df.to_csv(index=False,encoding="utf-8-sig"))
     return b.getvalue()
 
-st.title("02 Brand Personality Analyzer · v1.5")
+st.title("02 Brand Personality Analyzer · v1.6")
 st.caption("Aaker 15 facets → 5 dimensions · Mean ± SD · Radar visualization")
 st.info("시각화는 Yoo & Lee (2025)의 다차원 정량값 방사형 차트, 평균·표준편차, 하위 사례와 대표값을 함께 제시하는 방식을 참고하여 브랜드 개성 분석에 적용했습니다.")
 
-f=st.file_uploader("01 연구자 승인 CSV",type="csv")
+f=st.file_uploader("01 최종 승인 통합 CSV",type="csv",help="권장: 01_all_brands_approved_units.csv")
 if f:
     src=pd.read_csv(f)
-    if not {"Brand","Original_Text","Include"}.issubset(src.columns):
-        st.error("필수 열: Brand, Original_Text, Include");st.stop()
-    ok=src[pd.to_numeric(src.Include,errors="coerce").fillna(0).astype(int)==1]
-    rows=[];cnt={}
-    for _,r in ok.iterrows():
-        b=str(r.Brand);cnt.setdefault(b,0)
-        for t in split_units(r.Original_Text):
-            cnt[b]+=1;rows.append({"Unit_ID":f"{b}_U{cnt[b]:03d}","Brand":b,
-            "Page_Type":r.get("Page_Type",""),"Page_Title":r.get("Page_Title",""),
-            "Source_URL":r.get("Source_URL",""),"Text":t})
-    review=classify(pd.DataFrame(rows))
-    st.subheader("1. Content Unit 연구자 승인")
-    edited=st.data_editor(review,disabled=[c for c in review if c not in ["Researcher_Final","Researcher_Note"]],
-      column_config={"Researcher_Final":st.column_config.SelectboxColumn(options=[1,0],required=True)},
-      use_container_width=True,height=420,key="editor")
-    final=edited[pd.to_numeric(edited.Researcher_Final,errors="coerce").fillna(0).astype(int)==1].copy()
+    new01={"Brand","Unit_ID","Source_URL","Text","Researcher_Final"}
+    legacy={"Brand","Original_Text","Include"}
+
+    if new01.issubset(src.columns):
+        final=src[pd.to_numeric(src["Researcher_Final"],errors="coerce").fillna(0).astype(int)==1].copy()
+        st.success(f"01 최종 승인 CSV 인식 완료: {final['Brand'].nunique()}개 브랜드 · {len(final)}개 승인 Unit")
+        st.subheader("1. 01 최종 승인 데이터 확인")
+        st.caption("01에서 Content Unit 분리와 연구자 승인이 끝난 자료입니다. 02에서는 재분할·재승인하지 않습니다.")
+        st.dataframe(final,use_container_width=True,height=340,hide_index=True)
+
+    elif legacy.issubset(src.columns):
+        ok=src[pd.to_numeric(src.Include,errors="coerce").fillna(0).astype(int)==1]
+        rows=[];cnt={}
+        for _,r in ok.iterrows():
+            b=str(r.Brand);cnt.setdefault(b,0)
+            for t in split_units(r.Original_Text):
+                cnt[b]+=1;rows.append({"Unit_ID":f"{b}_U{cnt[b]:03d}","Brand":b,
+                "Page_Type":r.get("Page_Type",""),"Page_Title":r.get("Page_Title",""),
+                "Source_URL":r.get("Source_URL",""),"Text":t})
+        review=classify(pd.DataFrame(rows))
+        st.warning("구형 01 CSV 형식입니다. 호환을 위해 02에서 Unit 승인 단계를 수행합니다.")
+        edited=st.data_editor(review,disabled=[c for c in review if c not in ["Researcher_Final","Researcher_Note"]],
+          column_config={"Researcher_Final":st.column_config.SelectboxColumn(options=[1,0],required=True)},
+          use_container_width=True,height=420,key="editor")
+        final=edited[pd.to_numeric(edited.Researcher_Final,errors="coerce").fillna(0).astype(int)==1].copy()
+    else:
+        st.error("지원하지 않는 CSV 형식입니다. 01에서 받은 01_all_brands_approved_units.csv를 업로드하세요.")
+        st.stop()
+
     final["Word_Count"]=final["Text"].astype(str).str.split().str.len()
     final["Character_Count"]=final["Text"].astype(str).str.len()
     sample_info=final.groupby("Brand").agg(
@@ -201,12 +214,12 @@ if "R" in st.session_state:
 
     with st.expander("Unit별 분석 근거"):st.dataframe(detail[detail.Brand==brand],use_container_width=True,height=420)
 
-    files={"02_sample_size_information_v1_5.csv":R["sample_info"],"02_content_units_researcher_approval_v1_5.csv":R["approval"],
-    "02_brand_personality_5D_profiles_v1_5.csv":summary,
-    "02_brand_personality_15facet_profiles_v1_5.csv":fsum,
-    "02_brand_personality_unit_scores_v1_5.csv":detail}
+    files={"02_sample_size_information_v1_6.csv":R["sample_info"],"02_content_units_researcher_approval_v1_6.csv":R["approval"],
+    "02_brand_personality_5D_profiles_v1_6.csv":summary,
+    "02_brand_personality_15facet_profiles_v1_6.csv":fsum,
+    "02_brand_personality_unit_scores_v1_6.csv":detail}
     st.header("결과 다운로드")
-    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_5.zip","application/zip")
+    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_6.zip","application/zip")
     cols=st.columns(4)
     for c,(n,d) in zip(cols,files.items()):c.download_button(n.replace(".csv",""),d.to_csv(index=False).encode("utf-8-sig"),n,"text/csv")
 
