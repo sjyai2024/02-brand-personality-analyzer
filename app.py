@@ -83,7 +83,7 @@ def zip_csv(files):
         for name,df in files.items():z.writestr(name,df.to_csv(index=False,encoding="utf-8-sig"))
     return b.getvalue()
 
-st.title("02 Brand Personality Analyzer · v1.3")
+st.title("02 Brand Personality Analyzer · v1.4")
 st.caption("Aaker 15 facets → 5 dimensions · Mean ± SD · Radar visualization")
 st.info("시각화는 Yoo & Lee (2025)의 다차원 정량값 방사형 차트, 평균·표준편차, 하위 사례와 대표값을 함께 제시하는 방식을 참고하여 브랜드 개성 분석에 적용했습니다.")
 
@@ -105,27 +105,53 @@ if f:
     edited=st.data_editor(review,disabled=[c for c in review if c not in ["Researcher_Final","Researcher_Note"]],
       column_config={"Researcher_Final":st.column_config.SelectboxColumn(options=[1,0],required=True)},
       use_container_width=True,height=420,key="editor")
-    final=edited[pd.to_numeric(edited.Researcher_Final,errors="coerce").fillna(0).astype(int)==1]
-    st.write(f"최종 분석 대상: **{len(final)}개 unit**")
-    if st.button("2. 분석 실행",type="primary") and len(final):
-        with st.spinner("분석 중..."):facet,dim,rel=analyze(final.Text.tolist())
-        detail=pd.concat([final.reset_index(drop=True),facet,dim,rel],axis=1)
+    final=edited[pd.to_numeric(edited.Researcher_Final,errors="coerce").fillna(0).astype(int)==1].copy()
+    final["Word_Count"]=final["Text"].astype(str).str.split().str.len()
+    final["Character_Count"]=final["Text"].astype(str).str.len()
+    sample_info=final.groupby("Brand").agg(
+        N_Units=("Unit_ID","count"),
+        Word_Count=("Word_Count","sum"),
+        Character_Count=("Character_Count","sum")).reset_index()
+
+    st.subheader("2. 브랜드별 표본 크기 확인")
+    st.dataframe(sample_info,use_container_width=True,hide_index=True)
+    mode=st.radio("분석 모드",["Full Sample","Balanced Sample"],horizontal=True)
+    analysis_df=final.copy()
+    common_n=int(sample_info["N_Units"].min()) if len(sample_info) else 0
+    if mode=="Balanced Sample":
+        st.warning(f"현재 모든 브랜드를 포함할 경우 공통 가능한 최대 N은 {common_n}입니다. N=1 브랜드는 추가 공식 텍스트 확보를 우선 권장합니다.")
+        target_n=st.number_input("브랜드당 Unit 수 (N)",1,max(1,common_n),max(1,common_n),1)
+        seed=st.number_input("Random seed",0,value=42,step=1)
+        parts=[g.sample(n=int(target_n),random_state=int(seed)) for _,g in final.groupby("Brand",sort=False) if len(g)>=target_n]
+        analysis_df=pd.concat(parts,ignore_index=True) if parts else final.iloc[0:0].copy()
+        st.caption("동일 seed에서는 동일 unit이 선택됩니다.")
+        st.dataframe(analysis_df[["Unit_ID","Brand","Text"]],use_container_width=True,height=250)
+
+    st.write(f"이번 분석에 사용되는 unit: **{len(analysis_df)}개**")
+    if st.button("3. 분석 실행",type="primary") and len(analysis_df):
+        with st.spinner("분석 중..."):
+            facet,dim,rel=analyze(analysis_df.Text.tolist())
+        detail=pd.concat([analysis_df.reset_index(drop=True),facet,dim,rel],axis=1)
         ds=list(FACETS);rc=[d+"_Relative" for d in ds]
         mean=detail.groupby("Brand")[ds].mean()
-        sd=detail.groupby("Brand")[ds].std(ddof=1).fillna(0)
+        sd=detail.groupby("Brand")[ds].std(ddof=1)
         summary=mean.reset_index()
-        for d in ds:summary[d+"_SD"]=summary.Brand.map(sd[d])
+        for d in ds: summary[d+"_SD"]=summary.Brand.map(sd[d])
         rr=detail.groupby("Brand")[rc].mean()*100
-        for c in rc:summary[c]=summary.Brand.map(rr[c])
+        for c in rc: summary[c]=summary.Brand.map(rr[c])
         summary["N_Units"]=summary.Brand.map(detail.groupby("Brand").size())
         summary["Primary_Dimension"]=summary[ds].idxmax(axis=1)
         fcols=[c for c in detail if c.startswith("Facet_")]
         fsum=detail.groupby("Brand")[fcols].mean().reset_index()
-        st.session_state["R"]={"approval":edited,"summary":summary,"facets":fsum,"detail":detail}
+        st.session_state["R"]={"approval":edited,"summary":summary,"facets":fsum,
+                               "detail":detail,"sample_info":sample_info,"mode":mode}
 
 if "R" in st.session_state:
     R=st.session_state.R;summary=R["summary"];detail=R["detail"];fsum=R["facets"];ds=list(FACETS)
     st.divider();st.header("분석 결과 미리보기")
+    st.caption(f"Analysis mode: {R.get('mode','Full Sample')}")
+    st.subheader("브랜드별 원자료 정보량")
+    st.dataframe(R["sample_info"],use_container_width=True,hide_index=True)
     preview_cols=["Brand","Primary_Dimension","N_Units"]+list(FACETS.keys())
     st.dataframe(summary[preview_cols],use_container_width=True,hide_index=True)
     with st.expander("전체 결과표 보기 (SD · Relative 포함)"):
@@ -171,12 +197,12 @@ if "R" in st.session_state:
 
     with st.expander("Unit별 분석 근거"):st.dataframe(detail[detail.Brand==brand],use_container_width=True,height=420)
 
-    files={"02_content_units_researcher_approval_v1_3.csv":R["approval"],
-    "02_brand_personality_5D_profiles_v1_3.csv":summary,
-    "02_brand_personality_15facet_profiles_v1_3.csv":fsum,
-    "02_brand_personality_unit_scores_v1_3.csv":detail}
+    files={"02_sample_size_information_v1_4.csv":R["sample_info"],"02_content_units_researcher_approval_v1_4.csv":R["approval"],
+    "02_brand_personality_5D_profiles_v1_4.csv":summary,
+    "02_brand_personality_15facet_profiles_v1_4.csv":fsum,
+    "02_brand_personality_unit_scores_v1_4.csv":detail}
     st.header("결과 다운로드")
-    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_3.zip","application/zip")
+    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_4.zip","application/zip")
     cols=st.columns(4)
     for c,(n,d) in zip(cols,files.items()):c.download_button(n.replace(".csv",""),d.to_csv(index=False).encode("utf-8-sig"),n,"text/csv")
 
