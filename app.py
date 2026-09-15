@@ -83,7 +83,7 @@ def zip_csv(files):
         for name,df in files.items():z.writestr(name,df.to_csv(index=False,encoding="utf-8-sig"))
     return b.getvalue()
 
-st.title("02 Brand Personality Analyzer · v1.4")
+st.title("02 Brand Personality Analyzer · v1.5")
 st.caption("Aaker 15 facets → 5 dimensions · Mean ± SD · Radar visualization")
 st.info("시각화는 Yoo & Lee (2025)의 다차원 정량값 방사형 차트, 평균·표준편차, 하위 사례와 대표값을 함께 제시하는 방식을 참고하여 브랜드 개성 분석에 적용했습니다.")
 
@@ -115,11 +115,15 @@ if f:
 
     st.subheader("2. 브랜드별 표본 크기 확인")
     st.dataframe(sample_info,use_container_width=True,hide_index=True)
-    mode=st.radio("분석 모드",["Full Sample","Balanced Sample"],horizontal=True)
+    mode=st.radio("분석 모드",["Full Sample — Primary Analysis","Balanced Sample — Robustness Check"],horizontal=True)
     analysis_df=final.copy()
     common_n=int(sample_info["N_Units"].min()) if len(sample_info) else 0
-    if mode=="Balanced Sample":
-        st.warning(f"현재 모든 브랜드를 포함할 경우 공통 가능한 최대 N은 {common_n}입니다. N=1 브랜드는 추가 공식 텍스트 확보를 우선 권장합니다.")
+    if mode=="Full Sample — Primary Analysis":
+        st.success("본 분석: 연구자가 승인한 모든 브랜드 관련 Content Unit을 사용합니다.")
+    if mode=="Balanced Sample — Robustness Check":
+        st.warning(f"현재 모든 브랜드를 포함할 경우 공통 가능한 최대 N은 {common_n}입니다.")
+        if common_n < 3:
+            st.error("Balanced Sample은 현재 권장하지 않습니다. 공통 N이 3 미만입니다. 표본이 부족한 브랜드의 공식 브랜드 텍스트를 추가 확보한 뒤 강건성 확인에 사용하십시오.")
         target_n=st.number_input("브랜드당 Unit 수 (N)",1,max(1,common_n),max(1,common_n),1)
         seed=st.number_input("Random seed",0,value=42,step=1)
         parts=[g.sample(n=int(target_n),random_state=int(seed)) for _,g in final.groupby("Brand",sort=False) if len(g)>=target_n]
@@ -197,12 +201,12 @@ if "R" in st.session_state:
 
     with st.expander("Unit별 분석 근거"):st.dataframe(detail[detail.Brand==brand],use_container_width=True,height=420)
 
-    files={"02_sample_size_information_v1_4.csv":R["sample_info"],"02_content_units_researcher_approval_v1_4.csv":R["approval"],
-    "02_brand_personality_5D_profiles_v1_4.csv":summary,
-    "02_brand_personality_15facet_profiles_v1_4.csv":fsum,
-    "02_brand_personality_unit_scores_v1_4.csv":detail}
+    files={"02_sample_size_information_v1_5.csv":R["sample_info"],"02_content_units_researcher_approval_v1_5.csv":R["approval"],
+    "02_brand_personality_5D_profiles_v1_5.csv":summary,
+    "02_brand_personality_15facet_profiles_v1_5.csv":fsum,
+    "02_brand_personality_unit_scores_v1_5.csv":detail}
     st.header("결과 다운로드")
-    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_4.zip","application/zip")
+    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_5.zip","application/zip")
     cols=st.columns(4)
     for c,(n,d) in zip(cols,files.items()):c.download_button(n.replace(".csv",""),d.to_csv(index=False).encode("utf-8-sig"),n,"text/csv")
 
