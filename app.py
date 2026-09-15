@@ -72,9 +72,10 @@ def radar(ax, labels, mean, sd=None, unit_rows=None, title=""):
         lo=list(lo)+[lo[0]];hi=list(hi)+[hi[0]]
         ax.plot(angles,lo,linestyle="--",linewidth=1,label="Mean - SD")
         ax.plot(angles,hi,linestyle="--",linewidth=1,label="Mean + SD")
-    ax.set_xticks(angles[:-1]);ax.set_xticklabels(labels)
-    ax.set_title(title,pad=20)
-    ax.legend(loc="upper right",bbox_to_anchor=(1.25,1.15),fontsize=8)
+    ax.set_xticks(angles[:-1]);ax.set_xticklabels(labels, fontsize=8)
+    ax.tick_params(axis="y", labelsize=7)
+    ax.set_title(title,pad=14,fontsize=11)
+    ax.legend(loc="upper right",bbox_to_anchor=(1.18,1.12),fontsize=6.5,frameon=False)
 
 def zip_csv(files):
     b=io.BytesIO()
@@ -82,7 +83,7 @@ def zip_csv(files):
         for name,df in files.items():z.writestr(name,df.to_csv(index=False,encoding="utf-8-sig"))
     return b.getvalue()
 
-st.title("02 Brand Personality Analyzer · v1.2")
+st.title("02 Brand Personality Analyzer · v1.3")
 st.caption("Aaker 15 facets → 5 dimensions · Mean ± SD · Radar visualization")
 st.info("시각화는 Yoo & Lee (2025)의 다차원 정량값 방사형 차트, 평균·표준편차, 하위 사례와 대표값을 함께 제시하는 방식을 참고하여 브랜드 개성 분석에 적용했습니다.")
 
@@ -125,27 +126,34 @@ if f:
 if "R" in st.session_state:
     R=st.session_state.R;summary=R["summary"];detail=R["detail"];fsum=R["facets"];ds=list(FACETS)
     st.divider();st.header("분석 결과 미리보기")
-    st.dataframe(summary,use_container_width=True)
+    preview_cols=["Brand","Primary_Dimension","N_Units"]+list(FACETS.keys())
+    st.dataframe(summary[preview_cols],use_container_width=True,hide_index=True)
+    with st.expander("전체 결과표 보기 (SD · Relative 포함)"):
+        st.dataframe(summary,use_container_width=True,hide_index=True)
 
     brand=st.selectbox("브랜드 상세 보기",summary.Brand.tolist())
     one=summary[summary.Brand==brand].iloc[0]
     mean=[one[d] for d in ds];sd=[one[d+"_SD"] for d in ds]
     units=detail[detail.Brand==brand][ds].to_numpy()
-    fig=plt.figure(figsize=(7,7));ax=fig.add_subplot(111,polar=True)
+    fig=plt.figure(figsize=(4.8,4.8));ax=fig.add_subplot(111,polar=True)
     radar(ax,ds,mean,sd,units,f"{brand} · 5D profile")
-    st.pyplot(fig)
+    _, chart_col, _ = st.columns([1, 2.1, 1])
+    with chart_col:
+        st.pyplot(fig, use_container_width=True)
     st.caption("얇은 선: 승인 content unit · 굵은 선: 브랜드 평균 · 점선: 평균 ± 1 SD")
 
     st.subheader("브랜드 간 Radar 비교")
     choices=st.multiselect("비교 브랜드 선택 (2~3개 권장)",summary.Brand.tolist(),default=summary.Brand.tolist()[:2])
     if choices:
-        fig2=plt.figure(figsize=(7,7));ax2=fig2.add_subplot(111,polar=True)
+        fig2=plt.figure(figsize=(4.8,4.8));ax2=fig2.add_subplot(111,polar=True)
         angles=np.linspace(0,2*np.pi,len(ds),endpoint=False).tolist();angles+=angles[:1]
         for b in choices:
             r=summary[summary.Brand==b].iloc[0];v=[r[d] for d in ds];v+=v[:1]
             ax2.plot(angles,v,linewidth=2,label=b)
         ax2.set_xticks(angles[:-1]);ax2.set_xticklabels(ds);ax2.set_title("Brand comparison",pad=20);ax2.legend()
-        st.pyplot(fig2)
+        _, compare_col, _ = st.columns([1, 2.1, 1])
+        with compare_col:
+            st.pyplot(fig2, use_container_width=True)
 
     st.subheader("5차원 Mean ± SD")
     stat=pd.DataFrame({"Dimension":ds,"Mean":[one[d] for d in ds],"SD":[one[d+"_SD"] for d in ds],
@@ -155,17 +163,20 @@ if "R" in st.session_state:
     st.subheader("15 Facet 미리보기")
     ff=fsum[fsum.Brand==brand].drop(columns="Brand").T.reset_index()
     ff.columns=["Facet","Mean cosine similarity"]
-    fig3,ax3=plt.subplots(figsize=(8,6));ax3.barh(ff.Facet,ff["Mean cosine similarity"]);ax3.invert_yaxis()
-    ax3.set_title(f"{brand} · 15 facets");plt.tight_layout();st.pyplot(fig3)
+    fig3,ax3=plt.subplots(figsize=(6.2,4.4));ax3.barh(ff.Facet,ff["Mean cosine similarity"]);ax3.invert_yaxis()
+    ax3.set_title(f"{brand} · 15 facets", fontsize=11);ax3.tick_params(labelsize=8);plt.tight_layout()
+    _, facet_col, _ = st.columns([0.7, 2.6, 0.7])
+    with facet_col:
+        st.pyplot(fig3, use_container_width=True)
 
     with st.expander("Unit별 분석 근거"):st.dataframe(detail[detail.Brand==brand],use_container_width=True,height=420)
 
-    files={"02_content_units_researcher_approval_v1_2.csv":R["approval"],
-    "02_brand_personality_5D_profiles_v1_2.csv":summary,
-    "02_brand_personality_15facet_profiles_v1_2.csv":fsum,
-    "02_brand_personality_unit_scores_v1_2.csv":detail}
+    files={"02_content_units_researcher_approval_v1_3.csv":R["approval"],
+    "02_brand_personality_5D_profiles_v1_3.csv":summary,
+    "02_brand_personality_15facet_profiles_v1_3.csv":fsum,
+    "02_brand_personality_unit_scores_v1_3.csv":detail}
     st.header("결과 다운로드")
-    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_2.zip","application/zip")
+    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_3.zip","application/zip")
     cols=st.columns(4)
     for c,(n,d) in zip(cols,files.items()):c.download_button(n.replace(".csv",""),d.to_csv(index=False).encode("utf-8-sig"),n,"text/csv")
 
