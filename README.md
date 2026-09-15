@@ -1,15 +1,16 @@
-# 02 Brand Personality Analyzer v1.7
+# 02 Brand Personality Analyzer v1.8
 
-## NameError 수정
-01 v2.x 최종 승인 CSV를 사용할 때 `edited` 변수가 존재하지 않는데
-분석 결과 session_state 저장 단계에서 `edited`를 참조하던 오류를 수정했습니다.
+## 한글 그래프 깨짐 대응
+Matplotlib에서 서버에 설치된 한글 폰트를 자동 탐색합니다.
 
-이제 session_state에는 실제 01 최종 승인 데이터(`final`)를 저장합니다.
+우선순위:
+1. Noto Sans CJK KR
+2. Noto Sans KR
+3. NanumGothic
+4. Malgun Gothic
+5. AppleGothic
 
-지원:
-- 01_all_brands_approved_units.csv 직접 입력
-- Full Sample — Primary Analysis
-- Balanced Sample — Robustness Check
-- Aaker 15 facets → 5 dimensions
-- Mean ± SD / Radar / 브랜드 비교 / 15 Facet
-- CSV 및 ZIP 다운로드
+사용 가능한 한글 폰트가 있으면 Radar/legend의 한국어 브랜드명이 정상 출력됩니다.
+서버에 한글 폰트가 전혀 없으면 그래프 범례에 안전한 fallback을 사용하고 데이터 표의 원 브랜드명은 그대로 보존합니다.
+
+주의: 폰트 파일을 저장소에 포함하지 않습니다.

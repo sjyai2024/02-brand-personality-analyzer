@@ -1,7 +1,23 @@
 import streamlit as st
 import pandas as pd, numpy as np, re, io, zipfile
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 from sentence_transformers import SentenceTransformer
+
+def configure_korean_font():
+    """Streamlit Cloud/Linux와 macOS에서 사용 가능한 한글 폰트를 자동 선택."""
+    preferred=["Noto Sans CJK KR","Noto Sans KR","NanumGothic","Malgun Gothic","AppleGothic"]
+    available={f.name for f in fm.fontManager.ttflist}
+    for name in preferred:
+        if name in available:
+            plt.rcParams["font.family"]=name
+            plt.rcParams["axes.unicode_minus"]=False
+            return name
+    # 설치 폰트가 없으면 DejaVu Sans를 사용하되 앱에서 영문 표시명 fallback을 적용
+    plt.rcParams["axes.unicode_minus"]=False
+    return None
+
+KOREAN_FONT=configure_korean_font()
 
 st.set_page_config(page_title="02 Brand Personality Analyzer",layout="wide")
 FACETS={"Sincerity":["Down-to-earth","Honest","Wholesome","Cheerful"],
@@ -58,6 +74,14 @@ def analyze(texts):
     a=ddf.to_numpy();ex=np.exp((a-a.max(1,keepdims=True))/.10);rel=ex/ex.sum(1,keepdims=True)
     return fdf,ddf,pd.DataFrame(rel,columns=[d+"_Relative" for d in FACETS])
 
+def safe_brand_label(x):
+    x=str(x)
+    if KOREAN_FONT:
+        return x
+    # 한글 폰트가 없는 서버에서는 도메인/원문 브랜드명 대신 ASCII fallback이 있으면 사용
+    ascii_only="".join(ch for ch in x if ord(ch)<128).strip()
+    return ascii_only if ascii_only else "Brand"
+
 def radar(ax, labels, mean, sd=None, unit_rows=None, title=""):
     n=len(labels);angles=np.linspace(0,2*np.pi,n,endpoint=False).tolist();angles+=angles[:1]
     if unit_rows is not None:
@@ -83,7 +107,7 @@ def zip_csv(files):
         for name,df in files.items():z.writestr(name,df.to_csv(index=False,encoding="utf-8-sig"))
     return b.getvalue()
 
-st.title("02 Brand Personality Analyzer · v1.7")
+st.title("02 Brand Personality Analyzer · v1.8")
 st.caption("Aaker 15 facets → 5 dimensions · Mean ± SD · Radar visualization")
 st.info("시각화는 Yoo & Lee (2025)의 다차원 정량값 방사형 차트, 평균·표준편차, 하위 사례와 대표값을 함께 제시하는 방식을 참고하여 브랜드 개성 분석에 적용했습니다.")
 
@@ -192,7 +216,7 @@ if "R" in st.session_state:
         angles=np.linspace(0,2*np.pi,len(ds),endpoint=False).tolist();angles+=angles[:1]
         for b in choices:
             r=summary[summary.Brand==b].iloc[0];v=[r[d] for d in ds];v+=v[:1]
-            ax2.plot(angles,v,linewidth=2,label=b)
+            ax2.plot(angles,v,linewidth=2,label=safe_brand_label(b))
         ax2.set_xticks(angles[:-1]);ax2.set_xticklabels(ds);ax2.set_title("Brand comparison",pad=20);ax2.legend()
         _, compare_col, _ = st.columns([1, 2.1, 1])
         with compare_col:
@@ -214,12 +238,12 @@ if "R" in st.session_state:
 
     with st.expander("Unit별 분석 근거"):st.dataframe(detail[detail.Brand==brand],use_container_width=True,height=420)
 
-    files={"02_sample_size_information_v1_7.csv":R["sample_info"],"02_content_units_researcher_approval_v1_7.csv":R["approval"],
-    "02_brand_personality_5D_profiles_v1_7.csv":summary,
-    "02_brand_personality_15facet_profiles_v1_7.csv":fsum,
-    "02_brand_personality_unit_scores_v1_7.csv":detail}
+    files={"02_sample_size_information_v1_8.csv":R["sample_info"],"02_content_units_researcher_approval_v1_8.csv":R["approval"],
+    "02_brand_personality_5D_profiles_v1_8.csv":summary,
+    "02_brand_personality_15facet_profiles_v1_8.csv":fsum,
+    "02_brand_personality_unit_scores_v1_8.csv":detail}
     st.header("결과 다운로드")
-    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_7.zip","application/zip")
+    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_8.zip","application/zip")
     cols=st.columns(4)
     for c,(n,d) in zip(cols,files.items()):c.download_button(n.replace(".csv",""),d.to_csv(index=False).encode("utf-8-sig"),n,"text/csv")
 
