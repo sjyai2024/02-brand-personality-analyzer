@@ -3,3 +3,4 @@ pandas>=2.0,<3
 numpy>=1.26,<3
 sentence-transformers>=3.0,<6
 torch>=2.2
+matplotlib>=3.8,<4
