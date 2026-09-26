@@ -20,11 +20,33 @@ def configure_korean_font():
 KOREAN_FONT=configure_korean_font()
 
 st.set_page_config(page_title="02 Brand Personality Analyzer",layout="wide")
-FACETS={"Sincerity":["Down-to-earth","Honest","Wholesome","Cheerful"],
-"Excitement":["Daring","Spirited","Imaginative","Up-to-date"],
-"Competence":["Reliable","Intelligent","Successful"],
-"Sophistication":["Upper-class","Charming"],
-"Ruggedness":["Outdoorsy","Tough"]}
+FACETS={
+"Sincerity":{
+    "Down-to-earth":["down-to-earth","family-oriented","small-town"],
+    "Honest":["honest","sincere","real"],
+    "Wholesome":["wholesome","original"],
+    "Cheerful":["cheerful","sentimental","friendly"]
+},
+"Excitement":{
+    "Daring":["daring","trendy","exciting"],
+    "Spirited":["spirited","cool","young"],
+    "Imaginative":["imaginative","unique"],
+    "Up-to-date":["up-to-date","independent","contemporary"]
+},
+"Competence":{
+    "Reliable":["reliable","hard working","secure"],
+    "Intelligent":["intelligent","technical","corporate"],
+    "Successful":["successful","leader","confident"]
+},
+"Sophistication":{
+    "Upper-class":["upper class","glamorous","good looking"],
+    "Charming":["charming","feminine","smooth"]
+},
+"Ruggedness":{
+    "Outdoorsy":["outdoorsy","masculine","Western"],
+    "Tough":["tough","rugged"]
+}
+}
 PRODUCT_TERMS=["베스트셀러","세라마이딘","시카페어","워터뱅크","크림 스킨","바운시 앤 펌",
 "sleeping beauty technology","core product pillars","hybrid skincare","제품","성분","효능","사용법",
 "ingredient","ingredients","formula","formulation","clinical","dermatologist","피부과","전문의",
@@ -60,19 +82,84 @@ def classify(df):
     return pd.DataFrame(rows)
 
 def analyze(texts):
-    m=model();names=[];anchors=[]
-    for d,fs in FACETS.items():
-        for f in fs:names.append(f);anchors.append(f"A brand that is {f.lower()}.")
+    """
+    v1.9 controlled diagnostic:
+    - same multilingual SentenceTransformer as v1.9
+    - same cosine similarity logic
+    - only anchor construction changes:
+      42 Aaker traits -> 15 facet means -> 5 dimension means
+    - no z-score/baseline correction yet
+    """
+    m=model()
+
+    trait_names=[]
+    trait_prompts=[]
+    facet_trait_indices={}
+    facet_order=[]
+
+    for dim, facet_map in FACETS.items():
+        for facet, traits in facet_map.items():
+            facet_order.append((dim,facet))
+            idx=[]
+            for trait in traits:
+                idx.append(len(trait_names))
+                trait_names.append(trait)
+                trait_prompts.append(f"A brand that is {trait.lower()}.")
+            facet_trait_indices[(dim,facet)] = idx
+
+    # Unit embeddings and 42 trait anchor embeddings
     ue=m.encode(texts,normalize_embeddings=True,show_progress_bar=False)
-    ae=m.encode(anchors,normalize_embeddings=True,show_progress_bar=False)
-    fs=ue@ae.T
-    fdf=pd.DataFrame(fs,columns=["Facet_"+x for x in names])
-    dd={}
-    for d,fl in FACETS.items():
-        idx=[names.index(x) for x in fl];dd[d]=fs[:,idx].mean(1)
-    ddf=pd.DataFrame(dd)
-    a=ddf.to_numpy();ex=np.exp((a-a.max(1,keepdims=True))/.10);rel=ex/ex.sum(1,keepdims=True)
-    return fdf,ddf,pd.DataFrame(rel,columns=[d+"_Relative" for d in FACETS])
+    ae=m.encode(trait_prompts,normalize_embeddings=True,show_progress_bar=False)
+    trait_sim=ue@ae.T
+
+    # 42-trait detail
+    trait_df=pd.DataFrame(
+        trait_sim,
+        columns=["Trait_"+re.sub(r"[^A-Za-z0-9]+","_",x).strip("_") for x in trait_names]
+    )
+
+    # Trait -> 15 facets: equal mean within each original Aaker facet
+    facet_scores={}
+    for dim,facet in facet_order:
+        idx=facet_trait_indices[(dim,facet)]
+        facet_scores[facet]=trait_sim[:,idx].mean(1)
+    facet_df=pd.DataFrame({
+        "Facet_"+re.sub(r"[^A-Za-z0-9]+","_",facet).strip("_"): facet_scores[facet]
+        for _,facet in facet_order
+    })
+
+    # 15 facets -> 5 dimensions: equal mean across facets within dimension
+    dim_scores={}
+    for dim,facet_map in FACETS.items():
+        dim_scores[dim]=np.column_stack([facet_scores[f] for f in facet_map]).mean(1)
+    dim_df=pd.DataFrame(dim_scores)
+
+    # Keep v1.9 Relative % only for continuity/diagnostic display.
+    # It is NOT interpreted as a literal personality percentage.
+    a=dim_df.to_numpy()
+    ex=np.exp((a-a.max(1,keepdims=True))/.10)
+    rel=ex/ex.sum(1,keepdims=True)
+    rel_df=pd.DataFrame(rel,columns=[d+"_Relative" for d in FACETS])
+
+    # Anchor definition table for reproducibility
+    anchor_rows=[]
+    for dim,facet_map in FACETS.items():
+        n_facets=len(facet_map)
+        for facet,traits in facet_map.items():
+            n_traits=len(traits)
+            for trait in traits:
+                anchor_rows.append({
+                    "Dimension":dim,
+                    "Facet":facet,
+                    "Trait":trait,
+                    "Prompt":f"A brand that is {trait.lower()}.",
+                    "Trait_Weight_within_Facet":1/n_traits,
+                    "Facet_Weight_within_Dimension":1/n_facets,
+                    "Effective_Trait_Weight_within_Dimension":(1/n_traits)*(1/n_facets)
+                })
+    anchor_df=pd.DataFrame(anchor_rows)
+
+    return trait_df,facet_df,dim_df,rel_df,anchor_df
 
 def safe_brand_label(x):
     x=str(x)
@@ -107,9 +194,9 @@ def zip_csv(files):
         for name,df in files.items():z.writestr(name,df.to_csv(index=False,encoding="utf-8-sig"))
     return b.getvalue()
 
-st.title("02 Brand Personality Analyzer · v1.8")
-st.caption("Aaker 15 facets → 5 dimensions · Mean ± SD · Radar visualization")
-st.info("시각화는 Yoo & Lee (2025)의 다차원 정량값 방사형 차트, 평균·표준편차, 하위 사례와 대표값을 함께 제시하는 방식을 참고하여 브랜드 개성 분석에 적용했습니다.")
+st.title("02 Brand Personality Analyzer · v1.9")
+st.caption("Aaker 42 traits → 15 facets → 5 dimensions · Controlled anchor-ensemble diagnostic")
+st.info("v1.9는 v1.9과 동일한 모델·입력·cosine 계산을 유지하고, anchor만 Aaker(1997)의 최종 42 traits ensemble로 변경한 통제 진단 버전입니다. Baseline correction과 prompt template ensemble은 아직 적용하지 않습니다.")
 
 f=st.file_uploader("01 최종 승인 통합 CSV",type="csv",help="권장: 01_all_brands_approved_units.csv")
 if f:
@@ -171,8 +258,8 @@ if f:
     st.write(f"이번 분석에 사용되는 unit: **{len(analysis_df)}개**")
     if st.button("3. 분석 실행",type="primary") and len(analysis_df):
         with st.spinner("분석 중..."):
-            facet,dim,rel=analyze(analysis_df.Text.tolist())
-        detail=pd.concat([analysis_df.reset_index(drop=True),facet,dim,rel],axis=1)
+            trait,facet,dim,rel,anchor_def=analyze(analysis_df.Text.tolist())
+        detail=pd.concat([analysis_df.reset_index(drop=True),trait,facet,dim,rel],axis=1)
         ds=list(FACETS);rc=[d+"_Relative" for d in ds]
         mean=detail.groupby("Brand")[ds].mean()
         sd=detail.groupby("Brand")[ds].std(ddof=1)
@@ -183,12 +270,41 @@ if f:
         summary["N_Units"]=summary.Brand.map(detail.groupby("Brand").size())
         summary["Primary_Dimension"]=summary[ds].idxmax(axis=1)
         fcols=[c for c in detail if c.startswith("Facet_")]
+        tcols=[c for c in detail if c.startswith("Trait_")]
         fsum=detail.groupby("Brand")[fcols].mean().reset_index()
+        tsum=detail.groupby("Brand")[tcols].mean().reset_index()
+
+        # Diagnostic statistics: common-factor / baseline checks
+        dim_corr=summary[ds].corr()
+        dim_off=dim_corr.to_numpy()[np.triu_indices(len(ds),1)]
+        facet_corr=fsum[fcols].corr()
+        facet_off=facet_corr.to_numpy()[np.triu_indices(len(fcols),1)]
+
+        X=fsum[fcols].copy()
+        X=(X-X.mean())/X.std(ddof=0).replace(0,np.nan)
+        X=X.fillna(0).to_numpy()
+        _,sv,_=np.linalg.svd(X,full_matrices=False)
+        pc1=float((sv[0]**2)/(sv**2).sum()) if len(sv) and (sv**2).sum()>0 else np.nan
+
+        diagnostic=pd.DataFrame([{
+            "App_Version":"1.9",
+            "N_Brands":summary["Brand"].nunique(),
+            "N_Units":len(detail),
+            "Mean_5D_Pairwise_Correlation":float(dim_off.mean()) if len(dim_off) else np.nan,
+            "Mean_15Facet_Pairwise_Correlation":float(facet_off.mean()) if len(facet_off) else np.nan,
+            "PC1_Explained_Variance_15Facet_Standardized":pc1,
+            "Anchor_Method":"Aaker 42 traits -> equal mean within 15 facets -> equal mean within 5 dimensions",
+            "Prompt_Template":"A brand that is {trait}.",
+            "Baseline_Correction":"None (controlled diagnostic)",
+            "Prompt_Ensembling":"No (single fixed template per trait)"
+        }])
+
         st.session_state["R"]={"approval":final.copy(),"summary":summary,"facets":fsum,
-                               "detail":detail,"sample_info":sample_info,"mode":mode}
+                               "traits":tsum,"detail":detail,"sample_info":sample_info,
+                               "mode":mode,"anchor_def":anchor_def,"diagnostic":diagnostic}
 
 if "R" in st.session_state:
-    R=st.session_state.R;summary=R["summary"];detail=R["detail"];fsum=R["facets"];ds=list(FACETS)
+    R=st.session_state.R;summary=R["summary"];detail=R["detail"];fsum=R["facets"];tsum=R["traits"];ds=list(FACETS)
     st.divider();st.header("분석 결과 미리보기")
     st.caption(f"Analysis mode: {R.get('mode','Full Sample')}")
     st.subheader("브랜드별 원자료 정보량")
@@ -197,6 +313,10 @@ if "R" in st.session_state:
     st.dataframe(summary[preview_cols],use_container_width=True,hide_index=True)
     with st.expander("전체 결과표 보기 (SD · Relative 포함)"):
         st.dataframe(summary,use_container_width=True,hide_index=True)
+
+    st.subheader("v1.9 공통요인 진단")
+    st.dataframe(R["diagnostic"],use_container_width=True,hide_index=True)
+    st.caption("비교 기준: v1.9 sentence/proposition baseline의 5D 평균상관≈0.930, 15-facet 평균상관≈0.850, PC1≈86.1%. 값이 낮아지는지 확인합니다.")
 
     brand=st.selectbox("브랜드 상세 보기",summary.Brand.tolist())
     one=summary[summary.Brand==brand].iloc[0]
@@ -236,15 +356,26 @@ if "R" in st.session_state:
     with facet_col:
         st.pyplot(fig3, use_container_width=True)
 
+    st.subheader("42 Trait 미리보기")
+    tt=tsum[tsum.Brand==brand].drop(columns="Brand").T.reset_index()
+    tt.columns=["Trait","Mean cosine similarity"]
+    st.dataframe(tt,use_container_width=True,height=360,hide_index=True)
+
     with st.expander("Unit별 분석 근거"):st.dataframe(detail[detail.Brand==brand],use_container_width=True,height=420)
 
-    files={"02_sample_size_information_v1_8.csv":R["sample_info"],"02_content_units_researcher_approval_v1_8.csv":R["approval"],
-    "02_brand_personality_5D_profiles_v1_8.csv":summary,
-    "02_brand_personality_15facet_profiles_v1_8.csv":fsum,
-    "02_brand_personality_unit_scores_v1_8.csv":detail}
+    files={
+    "02_sample_size_information_v1_9.csv":R["sample_info"],
+    "02_content_units_researcher_approval_v1_9.csv":R["approval"],
+    "02_brand_personality_5D_profiles_v1_9.csv":summary,
+    "02_brand_personality_15facet_profiles_v1_9.csv":fsum,
+    "02_brand_personality_42trait_profiles_v1_9.csv":tsum,
+    "02_brand_personality_unit_scores_v1_9.csv":detail,
+    "02_anchor_definition_v1_9.csv":R["anchor_def"],
+    "02_diagnostic_metrics_v1_9.csv":R["diagnostic"]
+    }
     st.header("결과 다운로드")
-    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_8.zip","application/zip")
+    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_9.zip","application/zip")
     cols=st.columns(4)
     for c,(n,d) in zip(cols,files.items()):c.download_button(n.replace(".csv",""),d.to_csv(index=False).encode("utf-8-sig"),n,"text/csv")
 
-st.caption("Radar/Mean±SD 시각화는 Yoo & Lee (2025)의 정량화 결과 표현 방식을 참고한 시각적 적용이며, 본 연구의 브랜드 개성 지표 자체는 Aaker 5차원 구조에 기반합니다.")
+st.caption("v1.9는 Aaker(1997)의 최종 42 traits–15 facets–5 dimensions 구조를 sentence embedding에 계층적으로 적용한 통제 진단 버전입니다. 이는 Aaker의 원 설문 계산식을 재현하는 것이 아니라 본 연구의 computational operationalization입니다.")
