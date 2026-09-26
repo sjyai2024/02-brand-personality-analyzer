@@ -1,82 +1,50 @@
-# 02 Brand Personality Analyzer v1.9
+# 02 Brand Personality Analyzer v2.0
 
 ## 목적
-v1.8의 single-facet anchor baseline bias를 점검하기 위한 **controlled diagnostic version**입니다.
+v1.9의 Aaker 42-trait anchor ensemble을 유지한 상태에서,
+sentence embedding의 공통성분(common component / anisotropy)이
+15 facets와 5 dimensions를 함께 움직이게 하는지 확인하는 통제 진단 버전입니다.
 
-이번 버전은 입력 corpus, SentenceTransformer 모델, cosine similarity 계산을 그대로 유지하고,
-**semantic anchor만 Aaker (1997)의 최종 42 traits ensemble로 변경**합니다.
+## 유지
+- 240 sentence/proposition units
+- `paraphrase-multilingual-MiniLM-L12-v2`
+- Aaker 42 traits → 15 facets → 5 dimensions
+- fixed prompt: `A brand that is {trait}.`
+- normalized cosine similarity
+- trait→facet→dimension 동일가중 계층집계
 
-## Aaker hierarchy
-- 42 traits
-- 15 facets
-- 5 dimensions
+## v2.0에서 추가되는 유일한 핵심 변화
+1. 분석 sentence embeddings의 평균벡터를 계산
+2. sentence embeddings에서 평균을 제거
+3. centered sentence embeddings의 top principal component 1개를 추정
+4. **같은 평균벡터와 PC1 변환을 42 trait anchor embeddings에도 적용**
+5. sentence와 anchor 모두 PC1 투영 제거
+6. L2 재정규화
+7. corrected cosine similarity 계산
 
-계산:
+중요: common component는 **sentence corpus만으로 추정**합니다.
+Aaker anchors는 common direction 추정에 사용하지 않습니다.
 
-```text
-sentence × 42 trait prompts cosine similarity
-        ↓
-trait mean within each original Aaker facet
-        ↓
-15 facet scores
-        ↓
-equal facet mean within each dimension
-        ↓
-5 dimension scores
-```
+## Raw와 Corrected를 동시에 저장
+v2.0은 동일 실행에서:
+- Raw v1.9-equivalent
+- Mean-center + Top-1 corrected
 
-## 고정된 요소
-- 모델: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
-- normalized embeddings
-- cosine similarity
-- prompt template: `A brand that is {trait}.`
-- Full Sample / Balanced Sample UI
-- Mean ± SD / Radar
+결과를 모두 저장하여 직접 비교합니다.
 
-## 이번 버전에서 아직 하지 않는 것
-- facet z-score / baseline correction
-- multiple prompt-template ensemble
-- antonym / negative prompts
-- dimension centering
-
-이것들을 동시에 바꾸지 않는 이유는 **42-trait ensemble 자체의 효과를 v1.8과 분리해서 검증하기 위해서**입니다.
-
-## 입력
-권장 입력:
-
-`01_sentence_proposition_02_ready.csv`
-
-필수 열:
-- Brand
-- Unit_ID
-- Source_URL
-- Text
-- Researcher_Final
-
-## 주요 출력
-- `02_brand_personality_5D_profiles_v1_9.csv`
-- `02_brand_personality_15facet_profiles_v1_9.csv`
-- `02_brand_personality_42trait_profiles_v1_9.csv`
-- `02_brand_personality_unit_scores_v1_9.csv`
-- `02_anchor_definition_v1_9.csv`
-- `02_diagnostic_metrics_v1_9.csv`
-- `02_sample_size_information_v1_9.csv`
-- `02_content_units_researcher_approval_v1_9.csv`
-
-## 핵심 진단값
-앱은 다음 값을 자동 저장합니다.
-
+## 핵심 진단
 - Mean 5D pairwise correlation
 - Mean 15-facet pairwise correlation
-- PC1 explained variance of standardized 15-facet brand profiles
+- PC1 explained variance of standardized brand-level 15-facet profiles
+- facet baseline mean range
 
-v1.8 sentence/proposition baseline 참고값:
-- 5D mean pairwise correlation ≈ 0.930
-- 15-facet mean pairwise correlation ≈ 0.850
-- PC1 ≈ 86.1%
+## 해석
+진단지표가 낮아져도 그것만으로 최종 방법을 선택하지 않습니다.
+공통요인 제거는 의미정보도 제거할 수 있으므로,
+최종 채택은 향후 인간코딩/인간평가 대응 결과와 함께 판단합니다.
 
-v1.9에서 이 값들이 감소하는지 확인합니다.
-
-## 주의
-`Primary_Dimension`과 `Relative %`는 v1.8과의 연속성을 위해 남겨두지만,
-본 논문의 최종 브랜드 분류값이나 실제 퍼센트로 해석하지 않습니다.
+## 이론적 근거
+- Mu, Bhat, & Viswanath (2017), All-but-the-Top:
+  common mean과 상위 지배방향 제거를 통한 embedding postprocessing.
+- Su et al. (2021), Whitening Sentence Representations:
+  BERT 계열 sentence representation의 anisotropy 문제와 후처리 개선 가능성.

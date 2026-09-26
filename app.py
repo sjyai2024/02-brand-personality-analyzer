@@ -81,14 +81,55 @@ def classify(df):
         rows.append(q)
     return pd.DataFrame(rows)
 
+def _l2_normalize(x, eps=1e-12):
+    n=np.linalg.norm(x,axis=1,keepdims=True)
+    return x/np.maximum(n,eps)
+
+def _build_hierarchy(trait_sim, trait_names, facet_trait_indices, facet_order):
+    trait_df=pd.DataFrame(
+        trait_sim,
+        columns=["Trait_"+re.sub(r"[^A-Za-z0-9]+","_",x).strip("_") for x in trait_names]
+    )
+
+    facet_scores={}
+    for dim,facet in facet_order:
+        idx=facet_trait_indices[(dim,facet)]
+        facet_scores[facet]=trait_sim[:,idx].mean(1)
+
+    facet_df=pd.DataFrame({
+        "Facet_"+re.sub(r"[^A-Za-z0-9]+","_",facet).strip("_"):facet_scores[facet]
+        for _,facet in facet_order
+    })
+
+    dim_scores={}
+    for dim,facet_map in FACETS.items():
+        dim_scores[dim]=np.column_stack([facet_scores[f] for f in facet_map]).mean(1)
+    dim_df=pd.DataFrame(dim_scores)
+
+    a=dim_df.to_numpy()
+    ex=np.exp((a-a.max(1,keepdims=True))/.10)
+    rel=ex/ex.sum(1,keepdims=True)
+    rel_df=pd.DataFrame(rel,columns=[d+"_Relative" for d in FACETS])
+    return trait_df,facet_df,dim_df,rel_df
+
 def analyze(texts):
     """
-    v1.9 controlled diagnostic:
-    - same multilingual SentenceTransformer as v1.9
-    - same cosine similarity logic
-    - only anchor construction changes:
-      42 Aaker traits -> 15 facet means -> 5 dimension means
-    - no z-score/baseline correction yet
+    v2.0 controlled diagnostic.
+
+    Fixed from v1.9:
+    - same multilingual SentenceTransformer
+    - same 240 sentence/proposition corpus
+    - same Aaker 42 trait anchors
+    - same fixed prompt template
+    - same trait -> facet -> dimension hierarchy
+
+    New in v2.0:
+    - estimate common mean + top principal component from sentence embeddings only
+    - apply the SAME affine/projection transform to sentence and anchor embeddings
+    - re-normalize corrected vectors
+    - compute cosine similarity in corrected space
+
+    This implements an All-but-the-Top-style common-component correction.
     """
     m=model()
 
@@ -97,51 +138,51 @@ def analyze(texts):
     facet_trait_indices={}
     facet_order=[]
 
-    for dim, facet_map in FACETS.items():
-        for facet, traits in facet_map.items():
+    for dim,facet_map in FACETS.items():
+        for facet,traits in facet_map.items():
             facet_order.append((dim,facet))
             idx=[]
             for trait in traits:
                 idx.append(len(trait_names))
                 trait_names.append(trait)
                 trait_prompts.append(f"A brand that is {trait.lower()}.")
-            facet_trait_indices[(dim,facet)] = idx
+            facet_trait_indices[(dim,facet)]=idx
 
-    # Unit embeddings and 42 trait anchor embeddings
+    # Raw normalized embeddings.
     ue=m.encode(texts,normalize_embeddings=True,show_progress_bar=False)
     ae=m.encode(trait_prompts,normalize_embeddings=True,show_progress_bar=False)
-    trait_sim=ue@ae.T
 
-    # 42-trait detail
-    trait_df=pd.DataFrame(
-        trait_sim,
-        columns=["Trait_"+re.sub(r"[^A-Za-z0-9]+","_",x).strip("_") for x in trait_names]
+    # Raw baseline for within-run comparison.
+    raw_trait_sim=ue@ae.T
+    raw_trait_df,raw_facet_df,raw_dim_df,raw_rel_df=_build_hierarchy(
+        raw_trait_sim,trait_names,facet_trait_indices,facet_order
     )
 
-    # Trait -> 15 facets: equal mean within each original Aaker facet
-    facet_scores={}
-    for dim,facet in facet_order:
-        idx=facet_trait_indices[(dim,facet)]
-        facet_scores[facet]=trait_sim[:,idx].mean(1)
-    facet_df=pd.DataFrame({
-        "Facet_"+re.sub(r"[^A-Za-z0-9]+","_",facet).strip("_"): facet_scores[facet]
-        for _,facet in facet_order
-    })
+    # ---- Common-component correction ----
+    # Reference geometry is learned ONLY from the sentence corpus, not from anchors.
+    mean_vec=ue.mean(axis=0,keepdims=True)
+    uc=ue-mean_vec
+    ac=ae-mean_vec
 
-    # 15 facets -> 5 dimensions: equal mean across facets within dimension
-    dim_scores={}
-    for dim,facet_map in FACETS.items():
-        dim_scores[dim]=np.column_stack([facet_scores[f] for f in facet_map]).mean(1)
-    dim_df=pd.DataFrame(dim_scores)
+    # Top PC estimated from centered sentence embeddings.
+    _,sv,vh=np.linalg.svd(uc,full_matrices=False)
+    pc1=vh[0]
+    pc1_var=float((sv[0]**2)/(sv**2).sum()) if len(sv) and (sv**2).sum()>0 else np.nan
 
-    # Keep v1.9 Relative % only for continuity/diagnostic display.
-    # It is NOT interpreted as a literal personality percentage.
-    a=dim_df.to_numpy()
-    ex=np.exp((a-a.max(1,keepdims=True))/.10)
-    rel=ex/ex.sum(1,keepdims=True)
-    rel_df=pd.DataFrame(rel,columns=[d+"_Relative" for d in FACETS])
+    # Remove top-1 common direction from both sentence and anchor embeddings.
+    uc=uc-(uc@pc1[:,None])*pc1[None,:]
+    ac=ac-(ac@pc1[:,None])*pc1[None,:]
 
-    # Anchor definition table for reproducibility
+    # Cosine requires re-normalization after projection.
+    uc=_l2_normalize(uc)
+    ac=_l2_normalize(ac)
+
+    corrected_trait_sim=uc@ac.T
+    trait_df,facet_df,dim_df,rel_df=_build_hierarchy(
+        corrected_trait_sim,trait_names,facet_trait_indices,facet_order
+    )
+
+    # Anchor definition.
     anchor_rows=[]
     for dim,facet_map in FACETS.items():
         n_facets=len(facet_map)
@@ -159,7 +200,39 @@ def analyze(texts):
                 })
     anchor_df=pd.DataFrame(anchor_rows)
 
-    return trait_df,facet_df,dim_df,rel_df,anchor_df
+    # Reproducibility vectors in long format.
+    vector_rows=[]
+    for i,v in enumerate(mean_vec.ravel()):
+        vector_rows.append({"Vector_Type":"Corpus_Mean","Embedding_Dimension":i,"Value":float(v)})
+    for i,v in enumerate(pc1.ravel()):
+        vector_rows.append({"Vector_Type":"Top_PC1","Embedding_Dimension":i,"Value":float(v)})
+    vector_df=pd.DataFrame(vector_rows)
+
+    correction_meta=pd.DataFrame([{
+        "App_Version":"2.0",
+        "Reference_Set":"analysis sentence embeddings only",
+        "Reference_N":len(texts),
+        "Mean_Centering":"Yes",
+        "Top_PCs_Removed":1,
+        "Reference_PC1_Explained_Variance":pc1_var,
+        "Anchor_Transform":"same sentence-derived mean and PC1 applied to anchors",
+        "Post_Projection_Normalization":"L2",
+        "Similarity":"cosine via normalized dot product"
+    }])
+
+    return {
+        "trait":trait_df,
+        "facet":facet_df,
+        "dim":dim_df,
+        "rel":rel_df,
+        "raw_trait":raw_trait_df,
+        "raw_facet":raw_facet_df,
+        "raw_dim":raw_dim_df,
+        "raw_rel":raw_rel_df,
+        "anchor_def":anchor_df,
+        "vector_df":vector_df,
+        "correction_meta":correction_meta
+    }
 
 def safe_brand_label(x):
     x=str(x)
@@ -194,8 +267,8 @@ def zip_csv(files):
         for name,df in files.items():z.writestr(name,df.to_csv(index=False,encoding="utf-8-sig"))
     return b.getvalue()
 
-st.title("02 Brand Personality Analyzer · v1.9")
-st.caption("Aaker 42 traits → 15 facets → 5 dimensions · Controlled anchor-ensemble diagnostic")
+st.title("02 Brand Personality Analyzer · v2.0")
+st.caption("Aaker 42 traits → 15 facets → 5 dimensions · Mean-centering + Top-1 common-component removal")
 st.info("v1.9는 v1.9과 동일한 모델·입력·cosine 계산을 유지하고, anchor만 Aaker(1997)의 최종 42 traits ensemble로 변경한 통제 진단 버전입니다. Baseline correction과 prompt template ensemble은 아직 적용하지 않습니다.")
 
 f=st.file_uploader("01 최종 승인 통합 CSV",type="csv",help="권장: 01_all_brands_approved_units.csv")
@@ -258,50 +331,106 @@ if f:
     st.write(f"이번 분석에 사용되는 unit: **{len(analysis_df)}개**")
     if st.button("3. 분석 실행",type="primary") and len(analysis_df):
         with st.spinner("분석 중..."):
-            trait,facet,dim,rel,anchor_def=analyze(analysis_df.Text.tolist())
-        detail=pd.concat([analysis_df.reset_index(drop=True),trait,facet,dim,rel],axis=1)
+            A=analyze(analysis_df.Text.tolist())
+        trait=A["trait"];facet=A["facet"];dim=A["dim"];rel=A["rel"]
+        raw_trait=A["raw_trait"];raw_facet=A["raw_facet"];raw_dim=A["raw_dim"];raw_rel=A["raw_rel"]
+        anchor_def=A["anchor_def"]
+
+        # Corrected values use the standard column names.
+        # Raw diagnostic values are kept with Raw_ prefixes.
+        raw_trait=raw_trait.add_prefix("Raw_")
+        raw_facet=raw_facet.add_prefix("Raw_")
+        raw_dim=raw_dim.add_prefix("Raw_")
+        raw_rel=raw_rel.add_prefix("Raw_")
+        detail=pd.concat([
+            analysis_df.reset_index(drop=True),
+            raw_trait,raw_facet,raw_dim,raw_rel,
+            trait,facet,dim,rel
+        ],axis=1)
         ds=list(FACETS);rc=[d+"_Relative" for d in ds]
+        # Corrected primary summaries
         mean=detail.groupby("Brand")[ds].mean()
         sd=detail.groupby("Brand")[ds].std(ddof=1)
         summary=mean.reset_index()
-        for d in ds: summary[d+"_SD"]=summary.Brand.map(sd[d])
+        for d in ds:
+            summary[d+"_SD"]=summary.Brand.map(sd[d])
         rr=detail.groupby("Brand")[rc].mean()*100
-        for c in rc: summary[c]=summary.Brand.map(rr[c])
+        for c in rc:
+            summary[c]=summary.Brand.map(rr[c])
         summary["N_Units"]=summary.Brand.map(detail.groupby("Brand").size())
         summary["Primary_Dimension"]=summary[ds].idxmax(axis=1)
+
+        # Raw within-run baseline summaries
+        raw_ds=["Raw_"+d for d in ds]
+        raw_rc=["Raw_"+d+"_Relative" for d in ds]
+        raw_mean=detail.groupby("Brand")[raw_ds].mean().reset_index()
+        raw_mean=raw_mean.rename(columns={f"Raw_{d}":d for d in ds})
+        raw_mean["N_Units"]=raw_mean["Brand"].map(detail.groupby("Brand").size())
+        raw_mean["Primary_Dimension"]=raw_mean[ds].idxmax(axis=1)
+
         fcols=[c for c in detail if c.startswith("Facet_")]
         tcols=[c for c in detail if c.startswith("Trait_")]
+        raw_fcols=[c for c in detail if c.startswith("Raw_Facet_")]
+        raw_tcols=[c for c in detail if c.startswith("Raw_Trait_")]
+
         fsum=detail.groupby("Brand")[fcols].mean().reset_index()
         tsum=detail.groupby("Brand")[tcols].mean().reset_index()
+        raw_fsum=detail.groupby("Brand")[raw_fcols].mean().reset_index()
+        raw_tsum=detail.groupby("Brand")[raw_tcols].mean().reset_index()
 
-        # Diagnostic statistics: common-factor / baseline checks
-        dim_corr=summary[ds].corr()
-        dim_off=dim_corr.to_numpy()[np.triu_indices(len(ds),1)]
-        facet_corr=fsum[fcols].corr()
-        facet_off=facet_corr.to_numpy()[np.triu_indices(len(fcols),1)]
+        # -------- Diagnostic helpers --------
+        def common_factor_metrics(dim_df,facet_df,dim_cols,facet_cols,label):
+            dim_corr=dim_df[dim_cols].corr()
+            dim_off=dim_corr.to_numpy()[np.triu_indices(len(dim_cols),1)]
+            facet_corr=facet_df[facet_cols].corr()
+            facet_off=facet_corr.to_numpy()[np.triu_indices(len(facet_cols),1)]
 
-        X=fsum[fcols].copy()
-        X=(X-X.mean())/X.std(ddof=0).replace(0,np.nan)
-        X=X.fillna(0).to_numpy()
-        _,sv,_=np.linalg.svd(X,full_matrices=False)
-        pc1=float((sv[0]**2)/(sv**2).sum()) if len(sv) and (sv**2).sum()>0 else np.nan
+            X=facet_df[facet_cols].copy()
+            X=(X-X.mean())/X.std(ddof=0).replace(0,np.nan)
+            X=X.fillna(0).to_numpy()
+            _,sv,_=np.linalg.svd(X,full_matrices=False)
+            pc1=float((sv[0]**2)/(sv**2).sum()) if len(sv) and (sv**2).sum()>0 else np.nan
 
-        diagnostic=pd.DataFrame([{
-            "App_Version":"1.9",
-            "N_Brands":summary["Brand"].nunique(),
-            "N_Units":len(detail),
-            "Mean_5D_Pairwise_Correlation":float(dim_off.mean()) if len(dim_off) else np.nan,
-            "Mean_15Facet_Pairwise_Correlation":float(facet_off.mean()) if len(facet_off) else np.nan,
-            "PC1_Explained_Variance_15Facet_Standardized":pc1,
-            "Anchor_Method":"Aaker 42 traits -> equal mean within 15 facets -> equal mean within 5 dimensions",
-            "Prompt_Template":"A brand that is {trait}.",
-            "Baseline_Correction":"None (controlled diagnostic)",
-            "Prompt_Ensembling":"No (single fixed template per trait)"
-        }])
+            facet_means=facet_df[facet_cols].mean()
+            return {
+                "Representation":label,
+                "Mean_5D_Pairwise_Correlation":float(dim_off.mean()) if len(dim_off) else np.nan,
+                "Min_5D_Pairwise_Correlation":float(dim_off.min()) if len(dim_off) else np.nan,
+                "Max_5D_Pairwise_Correlation":float(dim_off.max()) if len(dim_off) else np.nan,
+                "Mean_15Facet_Pairwise_Correlation":float(facet_off.mean()) if len(facet_off) else np.nan,
+                "PC1_Explained_Variance_15Facet_Standardized":pc1,
+                "Facet_Baseline_Mean_Range":float(facet_means.max()-facet_means.min())
+            }
 
-        st.session_state["R"]={"approval":final.copy(),"summary":summary,"facets":fsum,
-                               "traits":tsum,"detail":detail,"sample_info":sample_info,
-                               "mode":mode,"anchor_def":anchor_def,"diagnostic":diagnostic}
+        raw_facet_for_diag=raw_fsum.rename(columns={c:c.replace("Raw_","",1) for c in raw_fcols})
+        corrected_metrics=common_factor_metrics(summary,fsum,ds,fcols,"Corrected_MeanCenter_Top1")
+        raw_metrics=common_factor_metrics(raw_mean,raw_facet_for_diag,ds,fcols,"Raw_v1.9_Equivalent")
+
+        diagnostic=pd.DataFrame([raw_metrics,corrected_metrics])
+        diagnostic["App_Version"]="2.0"
+        diagnostic["N_Brands"]=summary["Brand"].nunique()
+        diagnostic["N_Units"]=len(detail)
+        diagnostic["Anchor_Method"]="Aaker 42 traits -> 15 facets -> 5 dimensions"
+        diagnostic["Correction_Method"]=[
+            "None",
+            "sentence-reference mean-centering + top-1 PC removal + L2 renormalization"
+        ]
+        st.session_state["R"]={
+            "approval":final.copy(),
+            "summary":summary,
+            "raw_summary":raw_mean,
+            "facets":fsum,
+            "raw_facets":raw_fsum,
+            "traits":tsum,
+            "raw_traits":raw_tsum,
+            "detail":detail,
+            "sample_info":sample_info,
+            "mode":mode,
+            "anchor_def":anchor_def,
+            "diagnostic":diagnostic,
+            "correction_meta":A["correction_meta"],
+            "correction_vectors":A["vector_df"]
+        }
 
 if "R" in st.session_state:
     R=st.session_state.R;summary=R["summary"];detail=R["detail"];fsum=R["facets"];tsum=R["traits"];ds=list(FACETS)
@@ -314,7 +443,7 @@ if "R" in st.session_state:
     with st.expander("전체 결과표 보기 (SD · Relative 포함)"):
         st.dataframe(summary,use_container_width=True,hide_index=True)
 
-    st.subheader("v1.9 공통요인 진단")
+    st.subheader("v2.0 공통요인 보정 진단")
     st.dataframe(R["diagnostic"],use_container_width=True,hide_index=True)
     st.caption("비교 기준: v1.9 sentence/proposition baseline의 5D 평균상관≈0.930, 15-facet 평균상관≈0.850, PC1≈86.1%. 값이 낮아지는지 확인합니다.")
 
@@ -351,12 +480,12 @@ if "R" in st.session_state:
     ff=fsum[fsum.Brand==brand].drop(columns="Brand").T.reset_index()
     ff.columns=["Facet","Mean cosine similarity"]
     fig3,ax3=plt.subplots(figsize=(6.2,4.4));ax3.barh(ff.Facet,ff["Mean cosine similarity"]);ax3.invert_yaxis()
-    ax3.set_title(f"{brand} · 15 facets", fontsize=11);ax3.tick_params(labelsize=8);plt.tight_layout()
+    ax3.set_title(f"{brand} · corrected 15 facets", fontsize=11);ax3.tick_params(labelsize=8);plt.tight_layout()
     _, facet_col, _ = st.columns([0.7, 2.6, 0.7])
     with facet_col:
         st.pyplot(fig3, use_container_width=True)
 
-    st.subheader("42 Trait 미리보기")
+    st.subheader("42 Trait 미리보기 · corrected space")
     tt=tsum[tsum.Brand==brand].drop(columns="Brand").T.reset_index()
     tt.columns=["Trait","Mean cosine similarity"]
     st.dataframe(tt,use_container_width=True,height=360,hide_index=True)
@@ -364,17 +493,22 @@ if "R" in st.session_state:
     with st.expander("Unit별 분석 근거"):st.dataframe(detail[detail.Brand==brand],use_container_width=True,height=420)
 
     files={
-    "02_sample_size_information_v1_9.csv":R["sample_info"],
-    "02_content_units_researcher_approval_v1_9.csv":R["approval"],
-    "02_brand_personality_5D_profiles_v1_9.csv":summary,
-    "02_brand_personality_15facet_profiles_v1_9.csv":fsum,
-    "02_brand_personality_42trait_profiles_v1_9.csv":tsum,
-    "02_brand_personality_unit_scores_v1_9.csv":detail,
-    "02_anchor_definition_v1_9.csv":R["anchor_def"],
-    "02_diagnostic_metrics_v1_9.csv":R["diagnostic"]
+    "02_sample_size_information_v2_0.csv":R["sample_info"],
+    "02_content_units_researcher_approval_v2_0.csv":R["approval"],
+    "02_brand_personality_5D_profiles_corrected_v2_0.csv":summary,
+    "02_brand_personality_5D_profiles_raw_v2_0.csv":R["raw_summary"],
+    "02_brand_personality_15facet_profiles_corrected_v2_0.csv":fsum,
+    "02_brand_personality_15facet_profiles_raw_v2_0.csv":R["raw_facets"],
+    "02_brand_personality_42trait_profiles_corrected_v2_0.csv":tsum,
+    "02_brand_personality_42trait_profiles_raw_v2_0.csv":R["raw_traits"],
+    "02_brand_personality_unit_scores_v2_0.csv":detail,
+    "02_anchor_definition_v2_0.csv":R["anchor_def"],
+    "02_diagnostic_metrics_v2_0.csv":R["diagnostic"],
+    "02_common_component_metadata_v2_0.csv":R["correction_meta"],
+    "02_common_component_vectors_v2_0.csv":R["correction_vectors"]
     }
     st.header("결과 다운로드")
-    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v1_9.zip","application/zip")
+    st.download_button("모든 결과 ZIP 다운로드",zip_csv(files),"02_brand_personality_results_v2_0.zip","application/zip")
     cols=st.columns(4)
     for c,(n,d) in zip(cols,files.items()):c.download_button(n.replace(".csv",""),d.to_csv(index=False).encode("utf-8-sig"),n,"text/csv")
 
